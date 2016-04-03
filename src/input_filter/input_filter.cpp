@@ -55,6 +55,18 @@ static void signal_handler(int)
     exit(1);
 }
 
+static int shouldIntercept = false;
+
+static void should_intercept_enable(int)
+{
+	shouldIntercept = true;
+}
+
+static void should_intercept_disable(int)
+{
+	shouldIntercept = false;
+}
+
 // SUPER HACKY: Create a bunch of dummy input devices to force our device to get created at event6
 static int make_dummy(void)
 {
@@ -84,6 +96,8 @@ static int make_dummy(void)
 static void initialize(void)
 {
     signal(SIGINT, signal_handler);
+    signal(SIGUSR1, should_intercept_enable);
+    signal(SIGUSR2, should_intercept_disable);
 
     int dummies[3];
     dummies[0] = make_dummy();
@@ -185,7 +199,12 @@ static void __attribute__((noreturn)) loop(void)
     constexpr size_t buffer_size = 64;
     std::vector<struct iovec> iovecs;
     iovecs.reserve(buffer_size);
-    while (epoll_wait(epfd, &event, 1, -1) >= 0) {
+    while (epoll_wait(epfd, &event, 1, -1) >= 0 || errno == EINTR) {
+		if (errno == EINTR)
+		{
+			errno = 0;
+			continue;
+		}
         switch (events(event.data.u64)) {
             case events::input:
             {
@@ -200,12 +219,15 @@ static void __attribute__((noreturn)) loop(void)
                 for (int i = 0; i < events_read; ++i) {
                     struct input_event *ev = &ev_buf[i];
                     bool matched = false;
-                    for (const auto &matcher : matchers) {
-                        if (matcher(ev)) {
-                            matched = true;
-                            break;
-                        }
-                    }
+					if (shouldIntercept)
+					{
+						for (const auto &matcher : matchers) {
+							if (matcher(ev)) {
+								matched = true;
+								break;
+							}
+						}
+					}
 
                     if (!matched) {
                         iovecs.push_back({
