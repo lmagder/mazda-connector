@@ -266,11 +266,21 @@ int main(int argc, const char *argv[])
     }
 
     const std::unordered_set<int> captured_keys = {
-        // Steering wheel talk
-        KEY_G,
-
-        // Console navigation
-        // KEY_R,
+        KEY_G, //Steering wheel talk
+		KEY_LEFTBRACE, //Steering wheel next track
+		KEY_RIGHTBRACE, //Steering wheel prev track
+		KEY_E, //Music button
+		KEY_HOME, //Home button
+		KEY_R, //Nav button
+		KEY_BACKSPACE, //Back button
+		KEY_T, //Fav button
+		KEY_ENTER, //Commander depress
+		KEY_LEFT, //Commander push left
+		KEY_UP, //Commander push up
+		KEY_RIGHT, //Commander push right
+		KEY_DOWN, //Commadner push down
+		KEY_N, //Commander rotate left
+		KEY_M //Commadner rotate right
     };
 
     matchers.push_back(
