@@ -23,6 +23,10 @@
 #include "shared/prevent_brick.hpp"
 
 #define HMI_BUS_ADDRESS "unix:path=/tmp/dbus_hmi_socket"
+#define SERVICE_BUS_ADDRESS "unix:path=/tmp/dbus_service_socket"
+
+#define AUDIO_AA 13
+#define AUDIO_RADIO 6
 
 constexpr char source_device[] = "/dev/input/event1";
 constexpr char filtered_name[] = "Virtual Keyboard";
@@ -36,6 +40,96 @@ static int outfd = -1;
 
 using matcher_fn_t = std::function<bool (const struct input_event *)>;
 static std::vector<matcher_fn_t> matchers;
+
+int audio_status;
+
+static void switch_audio(int sessionId)
+{
+	DBusConnection *service_bus;
+	DBusError error;
+	DBusMessageIter args;
+
+	audio_status = sessionId;
+
+	service_bus = dbus_connection_open(SERVICE_BUS_ADDRESS, &error);
+
+	if (!service_bus) {
+		printf("DBUS: failed to connect to service bus: %s: %s\n", error.name, error.message);
+	}
+
+	if (!dbus_bus_register(service_bus, &error)) {
+		printf("DBUS: failed to register with service bus: %s: %s\n", error.name, error.message);
+	}
+
+	DBusMessage *msg = dbus_message_new_method_call("com.xsembedded.service.AudioManagement", "/com/xse/service/AudioManagement/AudioApplication", "com.xsembedded.ServiceProvider", "Request");
+	if (msg == NULL)
+	{
+		printf("DBUS: msg null\n");
+		return;
+	}
+
+	dbus_message_iter_init_append(msg, &args);
+	char* action = "requestAudioFocus";
+	if(!dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &action))
+	{
+		printf("DBUS: iter append failed\n");
+		return;
+	}
+	char* session = (char*) malloc(30);
+	snprintf(session, 30, "{\"sessionId\":%d}", sessionId);
+	puts(session);
+	if (!dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &session))
+	{
+		printf("DBUS: iter append failed 2\n");
+		return;
+	}
+
+	if (!dbus_connection_send(service_bus, msg, 0))
+	{
+		printf("DBUS: send failed\n");
+		return;
+	}
+
+	dbus_connection_flush(service_bus);
+	dbus_message_unref(msg);
+	dbus_connection_close(service_bus);
+}
+
+std::unordered_set<int> captured_keys_aa_audio = {
+	KEY_G, //Steering wheel talk
+	KEY_LEFTBRACE, //Steering wheel next track
+	KEY_RIGHTBRACE, //Steering wheel prev track
+	KEY_E, //Music button
+	KEY_HOME, //Home button
+	KEY_R, //Nav button
+	KEY_BACKSPACE, //Back button
+	KEY_T, //Fav button
+	KEY_ENTER, //Commander depress
+	KEY_LEFT, //Commander push left
+	KEY_UP, //Commander push up
+	KEY_RIGHT, //Commander push right
+	KEY_DOWN, //Commadner push down
+	KEY_N, //Commander rotate left
+	KEY_M //Commadner rotate right
+};
+
+std::unordered_set<int> captured_keys_radio_audio = {
+	KEY_G, //Steering wheel talk
+	KEY_E, //Music button
+	KEY_HOME, //Home button
+	KEY_R, //Nav button
+	KEY_BACKSPACE, //Back button
+	KEY_T, //Fav button
+	KEY_ENTER, //Commander depress
+	KEY_LEFT, //Commander push left
+	KEY_UP, //Commander push up
+	KEY_RIGHT, //Commander push right
+	KEY_DOWN, //Commadner push down
+	KEY_N, //Commander rotate left
+	KEY_M //Commadner rotate right
+};
+
+std::unordered_set <int> *captured_keys;
 
 static void destroy_device(int fd)
 {
@@ -60,11 +154,14 @@ static int shouldIntercept = false;
 static void should_intercept_enable(int)
 {
 	shouldIntercept = true;
+	switch_audio(AUDIO_AA);
+	captured_keys = &captured_keys_aa_audio;
 }
 
 static void should_intercept_disable(int)
 {
 	shouldIntercept = false;
+	switch_audio(AUDIO_RADIO);
 }
 
 // SUPER HACKY: Create a bunch of dummy input devices to force our device to get created at event6
@@ -219,7 +316,24 @@ static void __attribute__((noreturn)) loop(void)
                 for (int i = 0; i < events_read; ++i) {
                     struct input_event *ev = &ev_buf[i];
                     bool matched = false;
-					if (shouldIntercept)
+					if (shouldIntercept && ev->code == KEY_T)
+					{
+						if (ev->value == 1)
+						{
+							if (audio_status == AUDIO_AA)
+							{
+								switch_audio(AUDIO_RADIO);
+								captured_keys = &captured_keys_radio_audio;
+							}
+							else
+							{
+								switch_audio(AUDIO_AA);
+								captured_keys = &captured_keys_aa_audio;
+							}
+						}
+						matched = true;
+					}
+					else if (shouldIntercept)
 					{
 						for (const auto &matcher : matchers) {
 							if (matcher(ev)) {
@@ -265,27 +379,9 @@ int main(int argc, const char *argv[])
         errx(1, "failed to register with HMI bus: %s: %s\n", error.name, error.message);
     }
 
-    const std::unordered_set<int> captured_keys = {
-        KEY_G, //Steering wheel talk
-		KEY_LEFTBRACE, //Steering wheel next track
-		KEY_RIGHTBRACE, //Steering wheel prev track
-		KEY_E, //Music button
-		KEY_HOME, //Home button
-		KEY_R, //Nav button
-		KEY_BACKSPACE, //Back button
-		KEY_T, //Fav button
-		KEY_ENTER, //Commander depress
-		KEY_LEFT, //Commander push left
-		KEY_UP, //Commander push up
-		KEY_RIGHT, //Commander push right
-		KEY_DOWN, //Commadner push down
-		KEY_N, //Commander rotate left
-		KEY_M //Commadner rotate right
-    };
-
     matchers.push_back(
-        [hmi_bus, &captured_keys] (const struct input_event *ev) {
-            if (ev->type == EV_KEY && captured_keys.count(ev->code)) {
+        [hmi_bus] (const struct input_event *ev) {
+            if (ev->type == EV_KEY && captured_keys->count(ev->code)) {
                 printf("received talk button, status = %d\n", ev->value);
 
                 DBusMessage *msg = dbus_message_new_signal(
