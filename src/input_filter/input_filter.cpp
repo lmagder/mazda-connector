@@ -69,13 +69,13 @@ static void switch_audio(int sessionId)
 	}
 
 	dbus_message_iter_init_append(msg, &args);
-	char* action = "requestAudioFocus";
+	const char* action = "requestAudioFocus";
 	if(!dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &action))
 	{
 		printf("DBUS: iter append failed\n");
 		return;
 	}
-	char* session = (char*) malloc(30);
+	char session[30];
 	snprintf(session, 30, "{\"sessionId\":%d}", sessionId);
 	puts(session);
 	if (!dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &session))
